@@ -1,0 +1,296 @@
+name: Agent Engine CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'agent_engine/**'
+      - 'python_agents/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'agent_engine/**'
+      - 'python_agents/**'
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  PYTHON_VERSION: '3.10'
+  GOOGLE_CLOUD_PROJECT: ${{ secrets.GOOGLE_CLOUD_PROJECT }}
+  GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+jobs:
+  # Code Quality and Testing
+  quality:
+    name: Code Quality & Testing
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent_engine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+        
+    - name: Run pre-commit hooks
+      run: |
+        pre-commit install
+        pre-commit run --all-files
+        
+    - name: Run tests
+      run: |
+        python -m pytest ../python_agents/test_*.py -v --cov=agent_engine --cov-report=xml --cov-report=term-missing
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: agent-engine
+        name: agent-engine-coverage
+        
+    - name: Run security scan
+      run: |
+        bandit -r agent.py -f json -o bandit-report.json || true
+        
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-scan-results
+        path: agent_engine/bandit-report.json
+
+  # Agent Configuration Validation
+  validate:
+    name: Validate Agent Configuration
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent_engine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyyaml
+        
+    - name: Validate YAML configuration
+      run: |
+        python -c "import yaml; yaml.safe_load(open('agent_config.yaml'))"
+        echo "✅ YAML configuration is valid"
+        
+    - name: Validate agent import
+      run: |
+        python -c "from agent import root_agent, AGENT_CONFIG; print('✅ Agent validated:', root_agent.name)"
+        
+    - name: Validate agent metadata
+      run: |
+        python -c "
+        from agent import AGENT_CONFIG
+        assert AGENT_CONFIG['name'] == 'disaster_response_agent'
+        assert AGENT_CONFIG['version'] == '1.0.0'
+        assert 'input_schema' in AGENT_CONFIG
+        assert 'output_schema' in AGENT_CONFIG
+        print('✅ Agent metadata is valid')
+        "
+
+  # Build and Package
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: [quality, validate]
+    defaults:
+      run:
+        working-directory: agent_engine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build setuptools wheel
+        
+    - name: Build package
+      run: |
+        python -m build
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: python-package
+        path: agent_engine/dist/
+
+  # Deployment Jobs
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_environment == 'development')
+    environment: development
+    defaults:
+      run:
+        working-directory: agent_engine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
+        service_account_key: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+        export_default_credentials: true
+        
+    - name: Configure deployment environment
+      run: |
+        echo "ENVIRONMENT=development" >> $GITHUB_ENV
+        echo "AGENT_VERSION=dev-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+        
+    - name: Deploy to development
+      run: |
+        chmod +x deploy_agent.sh
+        ./deploy_agent.sh
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_environment == 'staging')
+    environment: staging
+    defaults:
+      run:
+        working-directory: agent_engine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
+        service_account_key: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+        export_default_credentials: true
+        
+    - name: Configure deployment environment
+      run: |
+        echo "ENVIRONMENT=staging" >> $GITHUB_ENV
+        echo "AGENT_VERSION=staging-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+        
+    - name: Deploy to staging
+      run: |
+        chmod +x deploy_agent.sh
+        ./deploy_agent.sh
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_environment == 'production'
+    environment: production
+    defaults:
+      run:
+        working-directory: agent_engine
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ env.GOOGLE_CLOUD_PROJECT }}
+        service_account_key: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+        export_default_credentials: true
+        
+    - name: Configure deployment environment
+      run: |
+        echo "ENVIRONMENT=production" >> $GITHUB_ENV
+        echo "AGENT_VERSION=v1.0.0" >> $GITHUB_ENV
+        
+    - name: Deploy to production
+      run: |
+        chmod +x deploy_agent.sh
+        ./deploy_agent.sh
+        
+    - name: Create GitHub release
+      if: success()
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: agent-engine-v1.0.0
+        release_name: Agent Engine v1.0.0
+        body: |
+          🚀 Agent Engine Production Deployment
+          
+          This release includes the disaster response agent engine deployed to production.
+          
+          **Changes:**
+          - Production-ready agent configuration
+          - Pinned dependencies for stability
+          - Comprehensive monitoring and logging
+          - Auto-scaling capabilities
+          
+          **Deployment:**
+          - Environment: Production
+          - Version: v1.0.0
+          - Timestamp: ${{ github.run_number }}
+        draft: false
+        prerelease: false
+
+  # Cleanup job
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    needs: [deploy-dev, deploy-staging, deploy-production]
+    if: always()
+    
+    steps:
+    - name: Clean up artifacts
+      run: |
+        echo "🧹 Cleaning up temporary artifacts..."
+        # Add any cleanup tasks here 

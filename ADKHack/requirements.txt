@@ -1,0 +1,12 @@
+# Web Server Dependencies for Disaster Response System
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# Optional: Development and monitoring dependencies
+python-json-logger>=2.0.0
+prometheus-client>=0.17.0
+
+# For health checks in container
+requests>=2.31.0 

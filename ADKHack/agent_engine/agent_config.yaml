@@ -1,0 +1,187 @@
+apiVersion: v1
+kind: AgentConfig
+metadata:
+  name: disaster-response-agent
+  namespace: default
+  labels:
+    app: disaster-response
+    version: v1.0.0
+    environment: production
+
+spec:
+  # Agent definition
+  agent:
+    name: disaster_response_agent
+    version: "1.0.0"
+    description: "AI-powered disaster response system with multi-agent pipeline"
+    
+    # Entry point
+    entrypoint: 
+      module: "agent_engine.agent"
+      object: "root_agent"
+    
+    # Runtime configuration
+    runtime:
+      python_version: "3.10"
+      timeout: 300  # 5 minutes
+      memory: "1Gi"
+      cpu: "0.5"
+    
+    # Environment variables
+    environment:
+      - name: ENVIRONMENT
+        value: "production"
+      - name: LOG_LEVEL
+        value: "INFO"
+      - name: PYTHONPATH
+        value: "/app/python_agents:/app"
+    
+    # Dependencies
+    dependencies:
+      requirements_file: "agent_engine/requirements.txt"
+    
+    # Input/Output schemas
+    input_schema:
+      type: object
+      properties:
+        file_path:
+          type: string
+          description: "Path to JSON file containing sensor data"
+        pattern:
+          type: string
+          description: "File pattern to match"
+          default: "*.json"
+        bigquery_config:
+          type: object
+          description: "Optional BigQuery configuration"
+          properties:
+            project_id:
+              type: string
+            dataset_id:
+              type: string
+              default: "disaster_response"
+            table_id:
+              type: string
+              default: "sensor_readings"
+    
+    output_schema:
+      type: object
+      properties:
+        pipeline_status:
+          type: string
+          enum: ["completed", "failed"]
+        risk_level:
+          type: string
+          enum: ["Low", "Medium", "High"]
+        priority:
+          type: string
+          enum: ["NORMAL", "HIGH", "CRITICAL"]
+        detection:
+          type: object
+        analysis:
+          type: object
+        alerts:
+          type: object
+  
+  # Deployment configuration
+  deployment:
+    # Scaling
+    autoscaling:
+      enabled: true
+      min_replicas: 0
+      max_replicas: 10
+      target_cpu_utilization: 70
+      target_memory_utilization: 80
+    
+    # Resource allocation
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "0.25"
+      limits:
+        memory: "1Gi"
+        cpu: "0.5"
+    
+    # Health checks
+    health_check:
+      enabled: true
+      path: "/health"
+      initial_delay: 30
+      period: 30
+      timeout: 10
+      failure_threshold: 3
+    
+    # Monitoring
+    monitoring:
+      enabled: true
+      metrics:
+        - name: "agent_execution_duration"
+          description: "Time taken to execute agent pipeline"
+        - name: "agent_success_rate"
+          description: "Percentage of successful agent executions"
+        - name: "bigquery_logging_rate"
+          description: "Rate of successful BigQuery data logging"
+    
+    # Logging
+    logging:
+      level: "INFO"
+      format: "structured"
+      destinations:
+        - "cloud_logging"
+        - "stdout"
+  
+  # Security
+  security:
+    service_account: "disaster-response-agent-sa@PROJECT_ID.iam.gserviceaccount.com"
+    
+    # IAM permissions required
+    permissions:
+      - "bigquery.datasets.get"
+      - "bigquery.tables.create"
+      - "bigquery.tables.updateData"
+      - "bigquery.jobs.create"
+      - "logging.logEntries.create"
+    
+    # Network security
+    network:
+      egress:
+        - protocol: "HTTPS"
+          destinations: ["*.googleapis.com"]
+        - protocol: "HTTPS" 
+          destinations: ["bigquery.googleapis.com"]
+  
+  # Configuration for different environments
+  environments:
+    development:
+      replicas: 1
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "0.1"
+        limits:
+          memory: "512Mi"
+          cpu: "0.25"
+      logging:
+        level: "DEBUG"
+    
+    staging:
+      replicas: 2
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "0.25"
+        limits:
+          memory: "1Gi"
+          cpu: "0.5"
+    
+    production:
+      replicas: 3
+      resources:
+        requests:
+          memory: "1Gi"
+          cpu: "0.5"
+        limits:
+          memory: "2Gi"
+          cpu: "1"
+      logging:
+        level: "INFO" 

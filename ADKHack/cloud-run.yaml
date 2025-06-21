@@ -1,0 +1,96 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: disaster-response-system
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      labels:
+        run.googleapis.com/startupProbeType: Default
+      annotations:
+        # CPU allocation and scaling
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/startup-cpu-boost: "true"
+        
+        # Memory and concurrency
+        run.googleapis.com/memory: "1Gi"
+        run.googleapis.com/cpu: "1"
+        
+        # Autoscaling configuration
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "100"
+        
+        # Connection settings
+        run.googleapis.com/timeout: "3600"
+        run.googleapis.com/sessionAffinity: false
+        
+    spec:
+      # Service account for BigQuery access (optional)
+      # serviceAccountName: disaster-response-service-account
+      
+      containerConcurrency: 80
+      timeoutSeconds: 3600
+      
+      containers:
+      - name: disaster-response-container
+        image: gcr.io/PROJECT_ID/disaster-response-system:latest
+        
+        ports:
+        - name: http1
+          containerPort: 8080
+          protocol: TCP
+        
+        env:
+        - name: PORT
+          value: "8080"
+        - name: ENVIRONMENT
+          value: "production"
+        - name: GOOGLE_CLOUD_PROJECT
+          value: "PROJECT_ID"
+        
+        # Resource allocation
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+          requests:
+            cpu: "0.5"
+            memory: "512Mi"
+        
+        # Health checks
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          timeoutSeconds: 10
+          periodSeconds: 10
+          failureThreshold: 3
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          timeoutSeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+
+  traffic:
+  - percent: 100
+    latestRevision: true 
